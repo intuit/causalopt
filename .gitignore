@@ -1,0 +1,38 @@
+# Mac
+.DS_Store
+
+# Spring
+/logs/
+
+# OIL
+OILLogs/
+
+# Code coverage
+.coverage
+.coverage_db_*
+coverage*.xml
+junit_results.xml
+htmlcov*/
+
+# Python
+*.pyc
+__pycache__/
+/venv/
+/.venv/
+
+# Tests
+.tox/
+
+# IDEs
+# Eclipse
+.classpath
+.project
+.settings/
+.factorypath
+# Intellij
+.idea/
+# ms vscode
+.vscode/
+
+# Builds
+dist/

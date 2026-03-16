@@ -1,0 +1,63 @@
+[project]
+name = "causalopt"
+version = "0.1.13a0"
+description = "A python package for causal inference"
+authors = [
+    {name = "Avik Basu", email = "avikbasu93@gmail.com"},
+    {name = "Lucas Squarize Chagas", email = "lsquarize@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+
+dependencies = [
+  "numpy (>2.0,<3.0)",
+  "pandas (>=2.2.3,<3.0.0)",
+  "scipy (>=1.13.0,<2.0.0)",
+  "matplotlib (>=3.10.8,<4.0.0)",
+  "plotnine (>=0.15.2,<0.16.0)",
+]
+
+[tool.poetry]
+packages = [{include = "causalopt"}]
+
+[tool.poetry.group.dev.dependencies]
+black = {extras = ["jupyter"], version = "^25.12.0"}
+isort = "^6.0.1"
+mypy = "^1.15.0"
+ruff = "^0.11.8"
+pre-commit = "^4.2.0"
+pandas-stubs = "^2.3.3"
+
+[tool.poetry.group.test.dependencies]
+pytest = "^8.3.5"
+pytest-cov = "^6.0.0"
+pytest-xdist = "^3.6.1"
+tox = "^4.24.2"
+
+
+[tool.poetry.group.examples.dependencies]
+jupyter = "^1.1.1"
+
+[tool.black]
+line-length = 100
+target-version = ["py311", "py312", "py313", "py314"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.isort]
+profile = "black"
+
+[tool.pytest.ini_options]
+pythonpath = "."
+testpaths = [
+    "tests",
+]
+looponfailroots = ["rddthreshtune", "tests"]
+addopts = "-p no:warnings -o log_cli=true --log-cli-level=INFO"
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"
