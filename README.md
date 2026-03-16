@@ -1,4 +1,4 @@
-# CausalOpt
+# CausalOpt - Causal Optimizer
 
 [![PyPI version](https://img.shields.io/pypi/v/causalopt.svg)](https://pypi.org/project/causalopt/)
 ![Supported Python versions](https://img.shields.io/badge/python-3.11_|_3.12_|_3.13-green?logo=python)
