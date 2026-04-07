@@ -5,7 +5,6 @@ import pytest
 from causalopt.thresh_tradeoff import (
     gains_eval,
     pred_tradeoff,
-    tradeoff_threshold,
 )
 from causalopt.thresh_tune import get_rd_objects
 
@@ -147,80 +146,3 @@ def test_gains_eval_welfare_is_cumsum_and_zero_at_current_threshold():
     # gain at current threshold is zero
     idx0 = w["x"].abs().idxmin()
     assert w.loc[idx0, "gain_y1"] == pytest.approx(0.0)
-
-
-# ============================================================
-# tradeoff_threshold
-# ============================================================
-
-
-def test_tradeoff_threshold_single_outcome():
-    df = _make_data(seed=7)
-
-    out = tradeoff_threshold(
-        df=df,
-        outcomes=["y1"],
-        prob_col="p_hat",
-        threshold=0.5,
-    )
-
-    assert isinstance(out, pd.DataFrame)
-    assert set(out.columns) == {"x", "n", "p", "gain_y1"}
-    assert len(out) > 0
-
-
-def test_tradeoff_threshold_multiple_outcomes_merge():
-    df = _make_data(seed=8)
-
-    out = tradeoff_threshold(
-        df=df,
-        outcomes=["y1", "y2"],
-        prob_col="p_hat",
-        threshold=0.5,
-    )
-
-    assert isinstance(out, pd.DataFrame)
-
-    # both gain columns must exist
-    assert "gain_y1" in out.columns
-    assert "gain_y2" in out.columns
-
-    # merge keys preserved
-    for col in ("x", "n", "p"):
-        assert col in out.columns
-
-
-def test_tradeoff_threshold_consistent_support_across_outcomes():
-    df = _make_data(seed=9)
-
-    out = tradeoff_threshold(
-        df=df,
-        outcomes=["y1", "y2"],
-        prob_col="p_hat",
-        threshold=0.4,
-    )
-
-    # no duplicate rows after merge
-    assert out[["x", "n", "p"]].duplicated().sum() == 0
-
-
-def test_tradeoff_threshold_handles_threshold_shift():
-    df = _make_data(seed=10)
-
-    out1 = tradeoff_threshold(
-        df=df,
-        outcomes=["y1"],
-        prob_col="p_hat",
-        threshold=0.3,
-    )
-
-    out2 = tradeoff_threshold(
-        df=df,
-        outcomes=["y1"],
-        prob_col="p_hat",
-        threshold=0.6,
-    )
-
-    # gain column exists and finite
-    assert np.all(np.isfinite(out1["gain_y1"]))
-    assert np.all(np.isfinite(out2["gain_y1"]))

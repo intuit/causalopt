@@ -60,10 +60,10 @@ print(f"95% CI: [{results['ci']['robust'][0]:.4f}, {results['ci']['robust'][1]:.
 Find the optimal threshold that maximizes welfare:
 
 ```python
-from causalopt.thresh_tune import exc_optim_thresh
+from causalopt import optimum_threshold
 
 # Run threshold optimization
-results = exc_optim_thresh(
+results = optimum_threshold(
     df=df,
     outcome_col="outcome",
     prob_col="probability_score",

@@ -1,3 +1,7 @@
+VENV := .venv
+PYTHON := $(VENV)/bin/python
+PIP := $(VENV)/bin/pip
+
 clean:
 	@rm -rf build dist .eggs *.egg-info
 	@rm -rf .benchmarks .coverage coverage.xml htmlcov report.xml .tox
@@ -11,15 +15,18 @@ clean:
 	@find . -type f -name "*.htmlcov_*" -exec rm -rf {} +
 
 lint:
-	poetry run isort .
-	poetry run black .
-	poetry run ruff check --fix .
+	$(VENV)/bin/isort .
+	$(VENV)/bin/black .
+	$(VENV)/bin/ruff check --fix .
 
 tox:
 	poetry run tox lint
 
 setup:
-	poetry install --with dev,test
+	python3 -m venv $(VENV)
+	$(PIP) install --quiet --upgrade pip
+	$(PIP) install --quiet isort "black[jupyter]" ruff pytest pytest-cov pytest-xdist
+	$(PIP) install --quiet -e .
 
 test:
-	poetry run pytest
+	$(VENV)/bin/pytest

@@ -3,7 +3,7 @@ from numpy.random import default_rng
 from scipy.linalg import qr
 
 
-def poly_eval(x_vec, b):
+def poly_eval(x_vec: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Vectorised polynomial evaluation.
 
     Parameters
@@ -23,7 +23,14 @@ def poly_eval(x_vec, b):
     return x @ b
 
 
-def sim_poly_ic(x, b, V, nsim=10000, alpha=0.05, seed=None):
+def sim_poly_ic(
+    x: np.ndarray,
+    b: np.ndarray,
+    V: np.ndarray,
+    nsim: int = 10000,
+    alpha: float = 0.05,
+    seed: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Simulation-based confidence / prediction band.
 
@@ -59,24 +66,28 @@ def sim_poly_ic(x, b, V, nsim=10000, alpha=0.05, seed=None):
 # ============================================================
 
 
-def tomat(x):
+def tomat(x: np.ndarray) -> np.ndarray:
+    """Reshape a 1-D array into a 2-D column matrix of shape (len(x), 1)."""
     return x.reshape(len(x), -1)
 
 
-def ncol(x):
+def ncol(x: np.ndarray) -> int:
+    """Return the number of columns in x, or 1 if x is 1-D."""
     try:
         return x.shape[1]
     except Exception:
         return 1
 
 
-def crossprod(x, y=None):
+def crossprod(x: np.ndarray, y: np.ndarray | None = None) -> np.ndarray:
+    """Compute x.T @ x, or x.T @ y if y is provided."""
     if y is None:
         return x.T @ x
     return x.T @ y
 
 
-def nanmat(n, m=None):
+def nanmat(n: int, m: int | None = None) -> np.ndarray:
+    """Create a NaN-filled array of shape (n,) or (n, m) if m is given."""
     if m is None:
         M = np.empty((n,))
     else:
@@ -85,20 +96,24 @@ def nanmat(n, m=None):
     return M
 
 
-def inv_chol(x):
+def inv_chol(x: np.ndarray) -> np.ndarray:
+    """Compute the inverse of a symmetric positive-definite matrix via Cholesky decomposition."""
     Linv = np.linalg.inv(np.linalg.cholesky(x))
     return crossprod(Linv, Linv)
 
 
-def qrXXinv(x):
+def qrXXinv(x: np.ndarray) -> np.ndarray:
+    """Compute (x.T @ x)^{-1} using Cholesky decomposition."""
     return inv_chol(crossprod(x, x))
 
 
-def complete_cases(x):
+def complete_cases(x: np.ndarray) -> np.ndarray:
+    """Return a boolean mask of rows in x that contain no NaN values."""
     return np.all(~np.isnan(x), axis=1)
 
 
-def covs_drop_fun(z, tol=1e-5):
+def covs_drop_fun(z: np.ndarray, tol: float = 1e-5) -> np.ndarray:
+    """Drop linearly dependent columns from z using QR decomposition with column pivoting."""
     q, r, pivot = qr(a=z, pivoting=True)
     keep = pivot[np.abs(np.diagonal(r)) > tol]
     return z[:, keep]
@@ -109,12 +124,27 @@ def covs_drop_fun(z, tol=1e-5):
 # ============================================================
 
 
-def rdrobust_kweight(X, c, h):
+def triangular_kernel(X: np.ndarray, c: float, h: float) -> np.ndarray:
+    """Compute triangular kernel weights centered at c with bandwidth h."""
     u = (X - c) / h
     return ((1 - np.abs(u)) * (np.abs(u) <= 1)) / h
 
 
-def rdrobust_res(X, y, Z, matches, dups, dupsid):
+def nn_residuals(
+    X: np.ndarray,
+    y: np.ndarray,
+    Z: np.ndarray | None,
+    matches: int,
+    dups: np.ndarray,
+    dupsid: np.ndarray,
+) -> np.ndarray:
+    """
+    Compute nearest-neighbor residuals for variance estimation in RD designs.
+
+    For each observation, the residual is formed using its nearest neighbors
+    (determined by matches, dups, and dupsid), producing heteroskedasticity-
+    robust inputs for the variance estimator.
+    """
     X = np.asarray(X).reshape(-1)
     y = np.asarray(y).reshape(-1)
     n = len(y)
@@ -157,7 +187,13 @@ def rdrobust_res(X, y, Z, matches, dups, dupsid):
     return res
 
 
-def rdrobust_vce(RX, res, s=None):
+def sandwich_se(RX: np.ndarray, res: np.ndarray, s: np.ndarray | None = None) -> np.ndarray:
+    """
+    Compute the heteroskedasticity-robust sandwich variance matrix.
+
+    Returns (RX * u).T @ (RX * u), where u is the effective residual vector
+    (optionally projected onto direction s).
+    """
     RX = np.asarray(RX)
     res = np.asarray(res)
 
@@ -175,33 +211,51 @@ def rdrobust_vce(RX, res, s=None):
 # ============================================================
 
 
-def rdrobust_bw(Y, X, Z, c, o, nu, o_B, h_V, h_B, nnmatch, dups, dupsid):
+def _bw_mse(
+    Y: np.ndarray,
+    X: np.ndarray,
+    Z: np.ndarray | None,
+    c: float,
+    p: int,
+    deriv: int,
+    p_bias: int,
+    h_var: float,
+    h_bias: float,
+    n_matches: int,
+    dups: np.ndarray,
+    dupsid: np.ndarray,
+) -> tuple[float, float, float, float]:
     """
-    Core building block for RD bandwidth selection.
-    Fixed configuration:
+    Core variance and bias components for MSE-optimal RD bandwidth selection.
+
+    Implements the plug-in bandwidth formula from Calonico, Cattaneo, and
+    Titiunik (2014) under a fixed configuration:
       - triangular kernel
-      - nearest-neighbor variance
-      - sharp RD
+      - nearest-neighbor variance estimator
+      - sharp RD design
       - scale regularization always ON
+
+    Returns the four scalars (V, B, R, rate) needed by the three-step
+    bandwidth selector in bw_select.
     """
 
     # ----------------------------
-    # Variance part
+    # Variance estimation (at h_var)
     # ----------------------------
-    w = rdrobust_kweight(X, c, h_V).reshape(-1, 1)
-    ind_V = (w > 0).reshape(-1)
+    w_h = triangular_kernel(X, c, h_var).reshape(-1, 1)
+    mask_h = (w_h > 0).reshape(-1)
 
-    eY = Y[ind_V].reshape(-1, 1)
-    eX = X[ind_V].reshape(-1, 1)
-    eW = w[ind_V].reshape(-1, 1)
+    eY = Y[mask_h].reshape(-1, 1)
+    eX = X[mask_h].reshape(-1, 1)
+    eW = w_h[mask_h].reshape(-1, 1)
 
-    n_V = int(np.sum(ind_V))
+    n_h = int(np.sum(mask_h))
 
-    R_V = nanmat(n_V, o + 1)
-    for j in range(o + 1):
-        R_V[:, j] = (eX[:, 0] - c) ** j
+    Rp = nanmat(n_h, p + 1)
+    for j in range(p + 1):
+        Rp[:, j] = (eX[:, 0] - c) ** j
 
-    invG_V = qrXXinv(R_V * np.sqrt(eW))
+    Gp_inv = qrXXinv(Rp * np.sqrt(eW))
 
     s = np.array([1.0])
     dZ = 0
@@ -212,16 +266,15 @@ def rdrobust_bw(Y, X, Z, c, o, nu, o_B, h_V, h_B, nnmatch, dups, dupsid):
         if Z.ndim == 1:
             Z = Z.reshape(-1, 1)
 
-        eZ = Z[ind_V, :]
+        eZ = Z[mask_h, :]
         dZ = ncol(eZ)
 
-        D_V = np.column_stack((eY, eZ))
-
-        U = crossprod(R_V * eW, D_V)
-        ZWD = crossprod(eZ * eW, D_V)
+        D_h = np.column_stack((eY, eZ))
+        U = crossprod(Rp * eW, D_h)
+        ZWD = crossprod(eZ * eW, D_h)
 
         colsZ = np.arange(1, 1 + dZ)
-        UiGU = crossprod(U[:, colsZ], invG_V @ U)
+        UiGU = crossprod(U[:, colsZ], Gp_inv @ U)
 
         ZWZ = ZWD[:, colsZ] - UiGU[:, colsZ]
         ZWY = ZWD[:, :1] - UiGU[:, :1]
@@ -229,66 +282,64 @@ def rdrobust_bw(Y, X, Z, c, o, nu, o_B, h_V, h_B, nnmatch, dups, dupsid):
         gamma = np.linalg.pinv(ZWZ) @ ZWY
         s = np.concatenate(([1.0], -gamma[:, 0]))
 
-    res_V = rdrobust_res(eX.flatten(), eY.flatten(), eZ, nnmatch, dups[ind_V], dupsid[ind_V])
+    res_h = nn_residuals(eX.flatten(), eY.flatten(), eZ, n_matches, dups[mask_h], dupsid[mask_h])
 
-    RX_V = R_V * eW
-    res_eff = res_V @ s.reshape(-1, 1)
+    WRp = Rp * eW
+    res_eff = res_h @ s.reshape(-1, 1)
 
-    aux_V = rdrobust_vce(RX_V, res_eff)
-    V_V = (invG_V @ aux_V @ invG_V)[nu, nu]
+    Vce_h = sandwich_se(WRp, res_eff)
+    var_h = (Gp_inv @ Vce_h @ Gp_inv)[deriv, deriv]
 
-    v = crossprod(RX_V, ((eX[:, 0] - c) / h_V) ** (o + 1))
-
-    Hp = np.array([h_V**j for j in range(o + 1)]).reshape(-1, 1)
-    BConst = (Hp * (invG_V @ v.reshape(-1, 1)))[nu, 0]
+    bias_vec = crossprod(WRp, ((eX[:, 0] - c) / h_var) ** (p + 1))
+    H_pow = np.array([h_var**j for j in range(p + 1)]).reshape(-1, 1)
+    bias_const = (H_pow * (Gp_inv @ bias_vec.reshape(-1, 1)))[deriv, 0]
 
     # ----------------------------
-    # Bias part
+    # Bias estimation (at h_bias)
     # ----------------------------
-    wB = rdrobust_kweight(X, c, h_B).reshape(-1, 1)
-    ind_B = (wB > 0).reshape(-1)
+    w_b = triangular_kernel(X, c, h_bias).reshape(-1, 1)
+    mask_b = (w_b > 0).reshape(-1)
 
-    eYB = Y[ind_B].reshape(-1, 1)
-    eXB = X[ind_B].reshape(-1, 1)
-    eWB = wB[ind_B].reshape(-1, 1)
+    y_b = Y[mask_b].reshape(-1, 1)
+    x_b = X[mask_b].reshape(-1, 1)
+    W_b = w_b[mask_b].reshape(-1, 1)
 
-    R_B = nanmat(int(np.sum(ind_B)), o_B + 1)
-    for j in range(o_B + 1):
-        R_B[:, j] = (eXB[:, 0] - c) ** j
+    Rq = nanmat(int(np.sum(mask_b)), p_bias + 1)
+    for j in range(p_bias + 1):
+        Rq[:, j] = (x_b[:, 0] - c) ** j
 
-    invG_B = qrXXinv(R_B * np.sqrt(eWB))
+    Gq_inv = qrXXinv(Rq * np.sqrt(W_b))
 
     if Z is not None:
-        eZB = Z[ind_B, :]
-        D_B = np.column_stack((eYB, eZB))
+        eZB = Z[mask_b, :]
+        D_b = np.column_stack((y_b, eZB))
     else:
-        D_B = eYB
+        D_b = y_b
 
-    beta_B = invG_B @ crossprod(R_B * eWB, D_B)
+    beta_q = Gq_inv @ crossprod(Rq * W_b, D_b)
+    beta_p1 = float(np.dot(s, beta_q[-1, :])) if beta_q.ndim == 2 else float(beta_q[-1])
 
-    beta_last = float(np.dot(s, beta_B[-1, :])) if beta_B.ndim == 2 else float(beta_B[-1])
-
-    res_B = rdrobust_res(
-        eXB.flatten(),
-        eYB.flatten(),
+    res_b = nn_residuals(
+        x_b.flatten(),
+        y_b.flatten(),
         eZB if Z is not None else None,
-        nnmatch,
-        dups[ind_B],
-        dupsid[ind_B],
+        n_matches,
+        dups[mask_b],
+        dupsid[mask_b],
     )
 
-    RX_B = R_B * eWB
-    resB_eff = res_B @ s.reshape(-1, 1)
+    WRq = Rq * W_b
+    res_b_eff = res_b @ s.reshape(-1, 1)
 
-    aux_B = rdrobust_vce(RX_B, resB_eff)
-    V_B = (invG_B @ aux_B @ invG_B)[-1, -1]
+    Vce_b = sandwich_se(WRq, res_b_eff)
+    var_b = (Gq_inv @ Vce_b @ Gq_inv)[-1, -1]
 
-    BWreg = 3 * (BConst**2) * V_B
+    reg = 3 * (bias_const**2) * var_b
 
-    B = np.sqrt(2 * (o + 1 - nu)) * BConst * beta_last
-    V = (2 * nu + 1) * (h_V ** (2 * nu + 1)) * V_V
-    R = (2 * (o + 1 - nu)) * BWreg
-    rate = 1 / (2 * o + 3)
+    B = np.sqrt(2 * (p + 1 - deriv)) * bias_const * beta_p1
+    V = (2 * deriv + 1) * (h_var ** (2 * deriv + 1)) * var_h
+    R = (2 * (p + 1 - deriv)) * reg
+    rate = 1 / (2 * p + 3)
 
     return V, B, R, rate
 
@@ -298,7 +349,20 @@ def rdrobust_bw(Y, X, Z, c, o, nu, o_B, h_V, h_B, nnmatch, dups, dupsid):
 # ============================================================
 
 
-def _prepare_inputs(y, x, c, Z, subset=None):
+def _prepare_inputs(
+    y: np.ndarray,
+    x: np.ndarray,
+    c: float,
+    Z: np.ndarray | None,
+    subset: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, float]:
+    """
+    Validate and preprocess RD inputs.
+
+    Converts y, x, and Z to arrays, applies an optional row subset, recenters
+    x at the cutoff c, removes rows with missing values, and returns the data
+    sorted by x. The returned cutoff is always 0.
+    """
     x = np.asarray(x).reshape(-1, 1)
     y = np.asarray(y).reshape(-1, 1)
 
@@ -333,7 +397,8 @@ def _prepare_inputs(y, x, c, Z, subset=None):
     return x, y, Z, c
 
 
-def _split_lr(x, y, Z):
+def _split_lr(x: np.ndarray, y: np.ndarray, Z: np.ndarray | None) -> dict:
+    """Split x, y, and Z into left (x < 0) and right (x >= 0) subsamples."""
     left = x[:, 0] < 0
     right = ~left
 
@@ -355,7 +420,13 @@ def _split_lr(x, y, Z):
     return out
 
 
-def make_dups(x):
+def make_dups(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Compute duplicate counts and within-duplicate IDs for each element of x.
+
+    Returns dups (how many times each value appears in x) and dupsid (the
+    sequential index of each occurrence within its group of duplicates).
+    """
     x = np.asarray(x).flatten()
     uniq, cnt = np.unique(x, return_counts=True)
     cnt_map = dict(zip(uniq, cnt))
