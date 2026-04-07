@@ -1,16 +1,22 @@
 import pandas as pd
 
-from causalopt.thresh_tune import get_rd_objects
 from causalopt.utils import poly_eval
 
 
 def pred_tradeoff(res: dict, inputs: pd.DataFrame = None) -> pd.DataFrame:
     """
-    Objective: Constructs the welfare function based on rdrobust estimates.
+    Evaluate left- and right-side polynomial predictions at a given support.
+
+    If inputs is None, the support is taken from the bin midpoints in res.
+    Otherwise, x, n, and p are read from inputs, which allows evaluating the
+    polynomial of one outcome on the support of another.
+
     Parameters
     ----------
-    results : results that come from get_rd_objects
-    inputs : include if support is from another model
+    res : dict
+        Output of get_rd_objects.
+    inputs : pd.DataFrame or None
+        Optional DataFrame with columns x, n, p to override the default support.
     """
 
     if inputs is None:
@@ -38,11 +44,18 @@ def pred_tradeoff(res: dict, inputs: pd.DataFrame = None) -> pd.DataFrame:
 
 def gains_eval(data: pd.DataFrame, outcome: str) -> pd.DataFrame:
     """
-    Objective: Constructs the welfare function based on rdrobust estimates.
+    Compute the cumulative welfare gain relative to the current threshold.
+
+    Calculates per-bin weighted welfare (treatment effect × proportion), accumulates
+    it from the highest x downward, then computes the gain over the current threshold
+    welfare and scales it by total n.
+
     Parameters
     ----------
-    data : predicted values from the rdd
-    outcome : name of outcome
+    data : pd.DataFrame
+        Output of pred_tradeoff.
+    outcome : str
+        Name of the outcome variable (used to name the gain column).
     """
     gain_outcome = f"gain_{outcome}"
 
@@ -58,53 +71,3 @@ def gains_eval(data: pd.DataFrame, outcome: str) -> pd.DataFrame:
     data_welfare = data[["x", "n", "p", gain_outcome]]
 
     return data_welfare
-
-
-def tradeoff_threshold(
-    df: pd.DataFrame,
-    outcomes: list,
-    prob_col: str,
-    threshold: float,
-):
-    """
-    Objective: This function performs the overall threshold tuning. It returns the optimum threshold and the expected gain
-    in the outcome variable.
-    ----------
-    The output of this function is the optimum threshold and the expected gain in the outcome variable resulting from the tuning.
-
-    Parameters
-    ----------
-    df : DataFrame
-           Original data.
-    outcomes: list
-        List of outcome variables.
-    prob_col : str
-           Column name of the running variable or probability from an ML model.
-    threshold : str
-           Current threshold. We will center the running variable at this point.
-    """
-
-    y = df[outcomes[0]]
-    x = df[prob_col] - threshold
-    c = 0
-
-    rdobj_main = get_rd_objects(y, x, c)
-
-    pred_main = pred_tradeoff(rdobj_main, inputs=None)
-
-    w_main = gains_eval(pred_main, outcomes[0])
-
-    final_result = w_main
-
-    for out in outcomes[1:]:
-        y = df[out]
-
-        rdobj_alt = get_rd_objects(y, x, c)
-
-        pred_alt = pred_tradeoff(rdobj_alt, pred_main[["x", "n", "p"]])
-
-        w_alt = gains_eval(pred_alt, out)
-
-        final_result = pd.merge(final_result, w_alt, on=["x", "n", "p"], how="inner")
-
-    return final_result

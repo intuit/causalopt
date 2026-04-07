@@ -4,21 +4,28 @@ import scipy.stats as sct
 from scipy.stats import t as student_t
 
 from causalopt.utils import (
+    _bw_mse,
     _prepare_inputs,
     _split_lr,
     crossprod,
     inv_chol,
     make_dups,
     ncol,
+    nn_residuals,
     qrXXinv,
-    rdrobust_bw,
-    rdrobust_kweight,
-    rdrobust_res,
-    rdrobust_vce,
+    sandwich_se,
+    triangular_kernel,
 )
 
 
-def bw_select(y, x, c=0, p=1, covariates=None, subset=None):
+def bw_select(
+    y: np.ndarray,
+    x: np.ndarray,
+    c: float = 0,
+    p: int = 1,
+    covariates: np.ndarray | None = None,
+    subset: np.ndarray | None = None,
+) -> dict:
     """
     Select MSE-optimal bandwidths for sharp Regression Discontinuity (RD)
     estimation under a fully fixed configuration.
@@ -27,9 +34,8 @@ def bw_select(y, x, c=0, p=1, covariates=None, subset=None):
     for sharp RD designs using local polynomial regression with a triangular
     kernel and nearest-neighbor variance estimation.
 
-    The implementation is fully deterministic and corresponds to a restricted
-    version of the bandwidth selector in the `rdrobust` package with the
-    following fixed choices:
+    The implementation follows the MSE-optimal bandwidth procedure from
+    Calonico, Cattaneo, and Titiunik (2014) under a fixed configuration:
 
         • Sharp RD design
         • Triangular kernel
@@ -46,7 +52,8 @@ def bw_select(y, x, c=0, p=1, covariates=None, subset=None):
 
     When covariates are supplied, they are incorporated linearly in all local
     polynomial regressions using a Frisch–Waugh–Lovell partialling-out strategy
-    that is numerically identical to the one used internally by `rdrobust`.
+    following the Frisch–Waugh–Lovell partialling-out approach described in
+    Calonico, Cattaneo, and Titiunik (2014).
 
     Parameters
     ----------
@@ -104,7 +111,7 @@ def bw_select(y, x, c=0, p=1, covariates=None, subset=None):
     parts = _split_lr(x, y, Z)
 
     q = p + 1
-    nnmatch = 3
+    n_matches = 3
 
     x_iq = np.quantile(x, 0.75) - np.quantile(x, 0.25)
     BWp = min(np.std(x, ddof=1), x_iq / 1.349)
@@ -124,8 +131,8 @@ def bw_select(y, x, c=0, p=1, covariates=None, subset=None):
     range_l = abs(parts["X_l"].min())
     range_r = abs(parts["X_r"].max())
 
-    def side_bw(Y, X, Z, dups, dupsid, o, nu, oB, hV, hB):
-        return rdrobust_bw(Y, X, Z, c, o, nu, oB, hV, hB, nnmatch, dups, dupsid)
+    def side_bw(Y, X, Z, dups, dupsid, p, deriv, p_bias, h_var, h_bias):
+        return _bw_mse(Y, X, Z, c, p, deriv, p_bias, h_var, h_bias, n_matches, dups, dupsid)
 
     C_d_l = side_bw(
         parts["Y_l"],
@@ -212,14 +219,21 @@ def bw_select(y, x, c=0, p=1, covariates=None, subset=None):
     }
 
 
-def rd_estimate(y, x, c=0, p=1, covariates=None, subset=None):
+def rd_estimate(
+    y: np.ndarray,
+    x: np.ndarray,
+    c: float = 0,
+    p: int = 1,
+    covariates: np.ndarray | None = None,
+    subset: np.ndarray | None = None,
+) -> dict:
     """
     Estimate a sharp Regression Discontinuity (RD) treatment effect at the
     cutoff using local polynomial regression.
 
     This function computes conventional and bias-corrected RD point estimates,
     standard errors, and confidence intervals under a fully fixed estimation
-    configuration that mirrors the default behavior of the `rdrobust` package.
+    configuration following Calonico, Cattaneo, and Titiunik (2014).
 
     The estimator uses:
         • A sharp RD design
@@ -227,11 +241,10 @@ def rd_estimate(y, x, c=0, p=1, covariates=None, subset=None):
         • A triangular kernel
         • Nearest-neighbor variance estimation
         • MSE-optimal bandwidths selected internally via `bw_select`
-        • Robust bias correction following Calonico–Cattaneo–Titiunik (2014)
+        • Robust bias correction following Calonico, Cattaneo, and Titiunik (2014)
 
     Covariates, if supplied, are incorporated linearly using a
-    Frisch–Waugh–Lovell partialling-out approach that is identical to the one
-    used in `rdrobust`.
+    Frisch–Waugh–Lovell partialling-out approach.
 
     Parameters
     ----------
@@ -298,7 +311,7 @@ def rd_estimate(y, x, c=0, p=1, covariates=None, subset=None):
 
     q = p + 1
     deriv = 0
-    nnmatch = 3
+    n_matches = 3
     level = 95
     scalepar = 1.0
 
@@ -328,10 +341,10 @@ def rd_estimate(y, x, c=0, p=1, covariates=None, subset=None):
     # --------------------------------------------------
     # Kernel weights
     # --------------------------------------------------
-    w_h_l = rdrobust_kweight(X_l, 0, h_l)
-    w_h_r = rdrobust_kweight(X_r, 0, h_r)
-    w_b_l = rdrobust_kweight(X_l, 0, b_l)
-    w_b_r = rdrobust_kweight(X_r, 0, b_r)
+    w_h_l = triangular_kernel(X_l, 0, h_l)
+    w_h_r = triangular_kernel(X_r, 0, h_r)
+    w_b_l = triangular_kernel(X_l, 0, b_l)
+    w_b_r = triangular_kernel(X_r, 0, b_r)
 
     ind_h_l, ind_h_r = w_h_l > 0, w_h_r > 0
     ind_b_l, ind_b_r = w_b_l > 0, w_b_r > 0
@@ -450,17 +463,17 @@ def rd_estimate(y, x, c=0, p=1, covariates=None, subset=None):
     # Variance estimation
     # --------------------------------------------------
 
-    res_h_l = rdrobust_res(eX_l, eY_l, eZ_l, nnmatch, dups_l, dupsid_l)
-    res_h_r = rdrobust_res(eX_r, eY_r, eZ_r, nnmatch, dups_r, dupsid_r)
+    res_h_l = nn_residuals(eX_l, eY_l, eZ_l, n_matches, dups_l, dupsid_l)
+    res_h_r = nn_residuals(eX_r, eY_r, eZ_r, n_matches, dups_r, dupsid_r)
 
     res_h_l = res_h_l @ s_Y.reshape(-1, 1)
     res_h_r = res_h_r @ s_Y.reshape(-1, 1)
 
-    V_Y_cl_l = invG_p_l @ rdrobust_vce(R_p_l * W_h_l, res_h_l) @ invG_p_l
-    V_Y_cl_r = invG_p_r @ rdrobust_vce(R_p_r * W_h_r, res_h_r) @ invG_p_r
+    V_Y_cl_l = invG_p_l @ sandwich_se(R_p_l * W_h_l, res_h_l) @ invG_p_l
+    V_Y_cl_r = invG_p_r @ sandwich_se(R_p_r * W_h_r, res_h_r) @ invG_p_r
 
-    V_Y_rb_l = invG_p_l @ rdrobust_vce(Q_q_l, res_h_l) @ invG_p_l
-    V_Y_rb_r = invG_p_r @ rdrobust_vce(Q_q_r, res_h_r) @ invG_p_r
+    V_Y_rb_l = invG_p_l @ sandwich_se(Q_q_l, res_h_l) @ invG_p_l
+    V_Y_rb_r = invG_p_r @ sandwich_se(Q_q_r, res_h_r) @ invG_p_r
 
     V_tau_cl = (V_Y_cl_l + V_Y_cl_r)[deriv, deriv]
     V_tau_rb = (V_Y_rb_l + V_Y_rb_r)[deriv, deriv]
@@ -496,19 +509,26 @@ def rd_estimate(y, x, c=0, p=1, covariates=None, subset=None):
     }
 
 
-def rd_objects(y, x, c=0, p=1, covariates=None, bw=None, subset=None):
+def rd_objects(
+    y: np.ndarray,
+    x: np.ndarray,
+    c: float = 0,
+    p: int = 1,
+    covariates: np.ndarray | None = None,
+    bw: list | None = None,
+    subset: np.ndarray | None = None,
+) -> dict:
     """
     Construct numerical objects required to produce a Regression Discontinuity
     (RD) plot under a fixed graphical configuration.
 
-    This function generates all intermediate numerical quantities used by
-    `rdplot` in the `rdrobust` package, but does not perform any plotting.
-    Instead, it returns bin-level summaries, fitted global polynomials, and
-    associated variance estimates that can be used to construct custom RD
-    visualizations.
+    Generates all intermediate numerical quantities needed to construct an RD
+    plot following the binning strategy of Calonico, Cattaneo, Farrell, and
+    Titiunik (2015), but does not perform any plotting itself. Returns
+    bin-level summaries, fitted global polynomials, and associated variance
+    estimates that can be used to construct custom RD visualizations.
 
-    The implementation corresponds to a restricted case with the following
-    fixed choices:
+    Fixed configuration:
 
         • Sharp RD design
         • Triangular kernel
@@ -651,8 +671,8 @@ def rd_objects(y, x, c=0, p=1, covariates=None, bw=None, subset=None):
     R_p_l = np.column_stack([(x_l[:, 0] - c) ** j for j in range(p + 1)])
     R_p_r = np.column_stack([(x_r[:, 0] - c) ** j for j in range(p + 1)])
 
-    W_l = rdrobust_kweight(x_l[:, 0], c, h_l).reshape(-1, 1)
-    W_r = rdrobust_kweight(x_r[:, 0], c, h_r).reshape(-1, 1)
+    W_l = triangular_kernel(x_l[:, 0], c, h_l).reshape(-1, 1)
+    W_r = triangular_kernel(x_r[:, 0], c, h_r).reshape(-1, 1)
 
     invG_l = qrXXinv(np.sqrt(W_l) * R_p_l)
     invG_r = qrXXinv(np.sqrt(W_r) * R_p_r)
@@ -710,8 +730,8 @@ def rd_objects(y, x, c=0, p=1, covariates=None, bw=None, subset=None):
     res_l = y_l - R_p_l @ gamma_l
     res_r = y_r - R_p_r @ gamma_r
 
-    V_l = invG_l @ rdrobust_vce(R_p_l * W_l, res_l) @ invG_l
-    V_r = invG_r @ rdrobust_vce(R_p_r * W_r, res_r) @ invG_r
+    V_l = invG_l @ sandwich_se(R_p_l * W_l, res_l) @ invG_l
+    V_r = invG_r @ sandwich_se(R_p_r * W_r, res_r) @ invG_r
 
     se_beta_l = np.sqrt(np.diag(V_l))
     se_beta_r = np.sqrt(np.diag(V_r))

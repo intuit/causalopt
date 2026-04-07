@@ -8,7 +8,15 @@ from causalopt.estimation import (
 from causalopt.utils import poly_eval, sim_poly_ic
 
 
-def get_rd_objects(y, x, c):
+def get_rd_objects(y: np.ndarray, x: np.ndarray, c: float) -> dict:
+    """
+    Run RD estimation and collect all objects needed for plotting and threshold tuning.
+
+    Internally calls rd_estimate to select bandwidths and estimate the treatment
+    effect, then calls rd_objects restricted to those bandwidths. Returns a dict
+    with raw estimates, plot objects, polynomial coefficients, variance matrices,
+    bin summaries, and the bias-corrected point estimate with its confidence interval.
+    """
     rdest = rd_estimate(y=y, x=x, c=c)
     h_l = rdest["bandwidths"]["h_l"]
     h_r = rdest["bandwidths"]["h_r"]
@@ -45,10 +53,17 @@ def get_rd_objects(y, x, c):
 
 def predictions(rdres: dict):
     """
-    Objective: Constructs the welfare function based on rdrobust estimates.
+    Build a prediction DataFrame from RD objects.
+
+    Evaluates the left- and right-side polynomials at each bin midpoint and
+    computes simulation-based confidence bands. Returns a DataFrame with bin
+    means, raw CI bounds, polynomial fitted values, and simulation CI bounds
+    for both sides of the cutoff.
+
     Parameters
     ----------
-    rdres : results that come from get_rd_objects
+    rdres : dict
+        Output of get_rd_objects.
     """
 
     b_l = rdres["b_l"]
@@ -100,11 +115,19 @@ def welfare(
     rdres: dict,
 ):
     """
-    Objective: Constructs the welfare function based on rdrobust estimates.
+    Compute welfare functions for optimum, conservative, and aggressive threshold scenarios.
+
+    For each scenario, calculates the per-bin welfare gain (treatment effect times
+    proportion), then accumulates it via cumulative sum over x. The sign of the
+    point estimate determines which side's confidence band is used for conservative
+    and aggressive scenarios.
+
     Parameters
     ----------
-    data : predicted values from the rdd
-    rdres : rdd estimate from get_rd_objects
+    data : pd.DataFrame
+        Output of predictions.
+    rdres : dict
+        Output of get_rd_objects.
     """
 
     estimate = rdres["estimates"][0]
@@ -141,14 +164,23 @@ def welfare(
     return data_welfare
 
 
-def optim_thresh(data_welfare: pd.DataFrame, rdres: dict, current_threshold):
+def optim_thresh(data_welfare: pd.DataFrame, rdres: dict, current_threshold: float) -> dict:
     """
-    Objective: finding optimum threshold using the function welfare_function and current threshold.
+    Identify optimum, conservative, and aggressive thresholds from the welfare surface.
+
+    Restricts the welfare DataFrame to the actionable side of the cutoff (determined
+    by the sign of the point estimate), finds the x value that maximises each welfare
+    scenario, and computes the expected welfare gain relative to the current threshold.
+    Also returns a recommendation based on statistical significance of the estimate.
 
     Parameters
     ----------
-    data_welfare : Welfare function results from welfare_function
-    estimates: point estimate, lb and ub from get_rd_objects
+    data_welfare : pd.DataFrame
+        Output of welfare.
+    rdres : dict
+        Output of get_rd_objects.
+    current_threshold : float
+        The threshold currently in use (in the original, uncentered scale).
     """
 
     estimates = rdres["estimates"]
@@ -213,49 +245,3 @@ def optim_thresh(data_welfare: pd.DataFrame, rdres: dict, current_threshold):
     }
 
     return result
-
-
-def exc_optim_thresh(df: pd.DataFrame, outcome_col: str, prob_col: str, threshold: float):
-    """
-    Objective: This function performs the overall threshold tuning. It returns the optimum threshold and the expected gain
-    in the outcome variable.
-    ----------
-    The output of this function is the optimum threshold and the expected gain in the outcome variable resulting from the tuning.
-
-    Parameters
-    ----------
-    df : DataFrame
-           Original data.
-    outcome_col : str
-           Column name of the outcome variable.
-    prob_col : str
-           Column name of the running variable or probability from an ML model.
-    threshold : float
-           Current threshold. We will center the running variable at this point.
-    """
-
-    data_descriptives = pd.DataFrame(df.describe())
-
-    y = df[outcome_col]
-    x = df[prob_col] - threshold
-    c = 0
-
-    rd_obj = get_rd_objects(y, x, c)
-
-    rd_predictions = predictions(rd_obj)
-
-    welfare_results = welfare(rd_predictions, rd_obj)
-
-    optimum_thresholds = optim_thresh(welfare_results, rd_obj, threshold)
-
-    final_result = {
-        "data_descriptives": data_descriptives,
-        "rd_results": rd_obj["rd_estimates"],
-        "rdplot": rd_obj["rd_plot_objects"],
-        "predictions": rd_predictions,
-        "welfare": welfare_results,
-        "optimum_thresholds": optimum_thresholds,
-        "current_threshold": threshold,
-    }
-
-    return final_result

@@ -2,11 +2,11 @@ import numpy as np
 import pandas as pd
 from plotnine.ggplot import ggplot
 
+from causalopt import optimum_threshold
 from causalopt.plots import (
     plot_thresh,
     rdd_impact,
 )
-from causalopt.thresh_tune import exc_optim_thresh
 
 # ------------------------------------------------------------
 # Test data generator
@@ -31,7 +31,7 @@ def _make_df(n=600, seed=0):
 def test_rdd_impact_returns_ggplot():
     df = _make_df(seed=1)
 
-    results = exc_optim_thresh(
+    results = optimum_threshold(
         df=df,
         outcome_col="y",
         prob_col="p_hat",
@@ -46,7 +46,7 @@ def test_rdd_impact_returns_ggplot():
 def test_rdd_impact_contains_expected_layers():
     df = _make_df(seed=2)
 
-    results = exc_optim_thresh(
+    results = optimum_threshold(
         df=df,
         outcome_col="y",
         prob_col="p_hat",
@@ -68,7 +68,7 @@ def test_rdd_impact_contains_expected_layers():
 def test_rdd_impact_uses_correct_axis_labels():
     df = _make_df(seed=3)
 
-    results = exc_optim_thresh(
+    results = optimum_threshold(
         df=df,
         outcome_col="y",
         prob_col="p_hat",
@@ -91,7 +91,7 @@ def test_rdd_impact_uses_correct_axis_labels():
 def test_rdd_impact_respects_y_limits():
     df = _make_df(seed=4)
 
-    results = exc_optim_thresh(
+    results = optimum_threshold(
         df=df,
         outcome_col="y",
         prob_col="p_hat",
@@ -119,7 +119,7 @@ def test_rdd_impact_respects_y_limits():
 def test_plot_thresh_returns_ggplot():
     df = _make_df(seed=5)
 
-    results = exc_optim_thresh(
+    results = optimum_threshold(
         df=df,
         outcome_col="y",
         prob_col="p_hat",
@@ -134,7 +134,7 @@ def test_plot_thresh_returns_ggplot():
 def test_plot_thresh_contains_threshold_lines():
     df = _make_df(seed=6)
 
-    results = exc_optim_thresh(
+    results = optimum_threshold(
         df=df,
         outcome_col="y",
         prob_col="p_hat",
@@ -154,7 +154,7 @@ def test_plot_thresh_contains_threshold_lines():
 def test_plot_thresh_positive_and_negative_branches():
     # Positive effect
     df_pos = _make_df(seed=7)
-    res_pos = exc_optim_thresh(
+    res_pos = optimum_threshold(
         df=df_pos,
         outcome_col="y",
         prob_col="p_hat",
@@ -167,7 +167,7 @@ def test_plot_thresh_positive_and_negative_branches():
     df_neg = df_pos.copy()
     df_neg["y"] = -df_neg["y"]
 
-    res_neg = exc_optim_thresh(
+    res_neg = optimum_threshold(
         df=df_neg,
         outcome_col="y",
         prob_col="p_hat",
@@ -180,7 +180,7 @@ def test_plot_thresh_positive_and_negative_branches():
 def test_plot_thresh_labels_present():
     df = _make_df(seed=8)
 
-    results = exc_optim_thresh(
+    results = optimum_threshold(
         df=df,
         outcome_col="y",
         prob_col="p_hat",

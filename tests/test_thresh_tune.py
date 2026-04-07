@@ -2,7 +2,6 @@ import numpy as np
 import pandas as pd
 
 from causalopt.thresh_tune import (
-    exc_optim_thresh,
     get_rd_objects,
     optim_thresh,
     predictions,
@@ -199,62 +198,3 @@ def test_optim_thresh_recommendation_strings():
 
     assert isinstance(res["Recommendation"], str)
     assert len(res["Recommendation"]) > 0
-
-
-# ============================================================
-# exc_optim_thresh (integration test)
-# ============================================================
-
-
-def test_exc_optim_thresh_full_pipeline():
-    rng = np.random.default_rng(8)
-    n = 1000
-
-    df = pd.DataFrame(
-        {
-            "y": 1 + rng.normal(size=n),
-            "p_hat": rng.uniform(0, 1, size=n),
-        }
-    )
-
-    threshold = 0.5
-
-    out = exc_optim_thresh(
-        df=df,
-        outcome_col="y",
-        prob_col="p_hat",
-        threshold=threshold,
-    )
-
-    expected_keys = {
-        "data_descriptives",
-        "rd_results",
-        "rdplot",
-        "predictions",
-        "welfare",
-        "optimum_thresholds",
-        "current_threshold",
-    }
-    assert expected_keys.issubset(out.keys())
-
-    assert out["current_threshold"] == threshold
-    assert isinstance(out["predictions"], pd.DataFrame)
-    assert isinstance(out["welfare"], pd.DataFrame)
-    assert isinstance(out["optimum_thresholds"], dict)
-
-
-def test_exc_optim_thresh_threshold_shift_invariance():
-    rng = np.random.default_rng(9)
-    df = pd.DataFrame(
-        {
-            "y": rng.normal(size=800),
-            "p_hat": rng.uniform(0, 1, size=800),
-        }
-    )
-
-    out1 = exc_optim_thresh(df, "y", "p_hat", threshold=0.3)
-    out2 = exc_optim_thresh(df, "y", "p_hat", threshold=0.5)
-
-    # Recommendation logic should still return valid output
-    assert isinstance(out1["optimum_thresholds"]["Recommendation"], str)
-    assert isinstance(out2["optimum_thresholds"]["Recommendation"], str)

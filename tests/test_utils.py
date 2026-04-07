@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from causalopt.utils import (
+    _bw_mse,
     _prepare_inputs,
     _split_lr,
     complete_cases,
@@ -11,14 +12,13 @@ from causalopt.utils import (
     make_dups,
     nanmat,
     ncol,
+    nn_residuals,
     poly_eval,
     qrXXinv,
-    rdrobust_bw,
-    rdrobust_kweight,
-    rdrobust_res,
-    rdrobust_vce,
+    sandwich_se,
     sim_poly_ic,
     tomat,
+    triangular_kernel,
 )
 
 # ============================================================
@@ -124,21 +124,21 @@ def test_covs_drop_fun_rank():
 # ============================================================
 
 
-def test_rdrobust_kweight():
+def test_triangular_kernel():
     X = np.array([-1.5, -1.0, 0.0, 1.0, 1.5])
-    w = rdrobust_kweight(X, c=0.0, h=1.0)
+    w = triangular_kernel(X, c=0.0, h=1.0)
 
     assert w[2] == pytest.approx(1.0)
     assert w[0] == 0.0
     assert w[-1] == 0.0
 
 
-def test_rdrobust_res_all_neighbors():
+def test_nn_residuals_all_neighbors():
     X = np.array([-1.0, 0.0, 1.0])
     y = np.array([1.0, 2.0, 3.0])
 
     dups, dupsid = make_dups(X)
-    res = rdrobust_res(X, y, None, matches=2, dups=dups, dupsid=dupsid)
+    res = nn_residuals(X, y, None, matches=2, dups=dups, dupsid=dupsid)
 
     Ji = 2
     scale = np.sqrt(Ji / (Ji + 1))
@@ -147,37 +147,37 @@ def test_rdrobust_res_all_neighbors():
         assert res[i, 0] == pytest.approx(scale * (y[i] - mean_others))
 
 
-def test_rdrobust_vce():
+def test_sandwich_se():
     rng = np.random.default_rng(1)
     RX = rng.normal(size=(10, 2))
     res = rng.normal(size=(10, 1))
 
-    np.testing.assert_allclose(rdrobust_vce(RX, res), (RX * res).T @ (RX * res))
+    np.testing.assert_allclose(sandwich_se(RX, res), (RX * res).T @ (RX * res))
 
 
 # ============================================================
-# rdrobust_bw (smoke test)
+# _bw_mse (smoke test)
 # ============================================================
 
 
-def test_rdrobust_bw_smoke():
+def test_bw_mse_smoke():
     rng = np.random.default_rng(0)
     X = np.linspace(-1, 1, 50)
     Y = 2 + 3 * X + rng.normal(scale=0.1, size=50)
 
     dups, dupsid = make_dups(X)
 
-    V, B, R, rate = rdrobust_bw(
+    V, B, R, rate = _bw_mse(
         Y=Y,
         X=X,
         Z=None,
         c=0.0,
-        o=1,
-        nu=0,
-        o_B=2,
-        h_V=0.8,
-        h_B=1.2,
-        nnmatch=49,
+        p=1,
+        deriv=0,
+        p_bias=2,
+        h_var=0.8,
+        h_bias=1.2,
+        n_matches=49,
         dups=dups,
         dupsid=dupsid,
     )

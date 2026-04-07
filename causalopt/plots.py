@@ -12,16 +12,40 @@ from plotnine import (
 )
 
 
-def rdd_impact(results, outcome_col: str):
+def rdd_impact(results: dict, outcome_col: str):
     """
-     Objective: Graph thresholds
-     ----------
-     rdd_results : result output from rdrobust
-     rdd_predictions : results that come from rdd_predictions
-     df : DataFrame
-       Original data.
+    Plot the RD impact at the current threshold for a single outcome variable.
+
+    Produces a ggplot showing:
+        - Bin means as scatter points (effectively invisible; used to set the
+          axis scale from the observed data range)
+        - Fitted left polynomial (red line) for observations below the cutoff
+        - Fitted right polynomial (blue line) for observations above the cutoff
+        - A grey confidence ribbon across the full x range (95% simulation CI)
+        - A vertical dashed line at x=0 (the centered threshold)
+
+    The y-axis is clipped to the overlap between the observed data range and the
+    prediction CI range to avoid excessive whitespace.
+
+    The plot caption reports:
+        - Bias-corrected point estimate of the RD treatment effect
+        - 95% bias-corrected confidence interval
+        - ITC (implied treatment-to-control ratio): the percent change in the
+          outcome at the threshold relative to the control mean
+
+    Parameters
+    ----------
+    results : dict
+        Output of optimum_threshold. Must contain keys "data_descriptives",
+        "rd_results", and "predictions".
     outcome_col : str
-           Name of the outcome variable.
+        Name of the outcome variable. Used in the plot title, y-axis label,
+        and to look up the observed min/max from data_descriptives.
+
+    Returns
+    -------
+    plotnine.ggplot
+        A ggplot object. Call .show() or display inline in a notebook.
     """
     # colors
     blue = "#0177c9"
@@ -84,12 +108,41 @@ def rdd_impact(results, outcome_col: str):
     return graph
 
 
-def plot_thresh(results, outcome_col: str):
+def plot_thresh(results: dict, outcome_col: str):
     """
-    Objective: Graph thresholds
+    Plot RD polynomial predictions with candidate threshold lines.
+
+    Visualises where the threshold should move and by how much, using the
+    welfare-maximizing thresholds from optimum_threshold. The x-axis is in the
+    original (uncentered) scale of the running variable.
+
+    Visual elements:
+        - Solid left polynomial (red) for x ≤ current_threshold
+        - Solid right polynomial (blue) for x ≥ current_threshold
+        - Dashed extension of the active-side polynomial across the other side,
+          showing the counterfactual outcome if the threshold were moved there.
+          The active side is determined by the sign of the RD estimate:
+            positive estimate → right-side polynomial extended left (dashed blue)
+            negative estimate → left-side polynomial extended right (dashed red)
+        - Grey confidence ribbon for the active-side polynomial across all x
+        - Four vertical dashed lines:
+            black  – current threshold
+            blue   – optimum threshold (maximises expected welfare gain)
+            red    – conservative threshold (uses lower CI of active polynomial)
+            green  – aggressive threshold (uses upper CI of active polynomial)
+
+    Parameters
     ----------
-    results: results from optimum_threshold
-    outcome_col: outcome variable
+    results : dict
+        Output of optimum_threshold. Must contain keys "rd_results",
+        "predictions", "optimum_thresholds", and "current_threshold".
+    outcome_col : str
+        Name of the outcome variable. Used in the plot title and y-axis label.
+
+    Returns
+    -------
+    plotnine.ggplot
+        A ggplot object. Call .show() or display inline in a notebook.
     """
 
     rdest = results["rd_results"]
