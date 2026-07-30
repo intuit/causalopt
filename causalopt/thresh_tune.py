@@ -8,7 +8,14 @@ from causalopt.estimation import (
 from causalopt.utils import poly_eval, sim_poly_ic
 
 
-def get_rd_objects(y: np.ndarray, x: np.ndarray, c: float) -> dict:
+def get_rd_objects(
+    y: np.ndarray,
+    x: np.ndarray,
+    c: float,
+    covariates: np.ndarray | None = None,
+    out_of_bandwidth: bool = False,
+    weights: np.ndarray | None = None,
+) -> dict:
     """
     Run RD estimation and collect all objects needed for plotting and threshold tuning.
 
@@ -16,18 +23,80 @@ def get_rd_objects(y: np.ndarray, x: np.ndarray, c: float) -> dict:
     effect, then calls rd_objects restricted to those bandwidths. Returns a dict
     with raw estimates, plot objects, polynomial coefficients, variance matrices,
     bin summaries, and the bias-corrected point estimate with its confidence interval.
+
+    Parameters
+    ----------
+    covariates : np.ndarray or None
+        Optional covariate matrix to include in the RD estimation via
+        Frisch-Waugh-Lovell partialling-out. Shape (N, k).
+    out_of_bandwidth : bool, default False
+        If False (default), the prediction/eval bins are built only on the
+        bandwidth-selected subset (-h_l <= x <= h_r), matching the estimation
+        window. If True, the bins span the full observed support of x so the
+        tradeoff/welfare curves can be reported over the whole provided range.
+        The fit itself is unchanged: coefficients/variances (b_l/b_r/v_l/v_r) and
+        the point estimate still come from the bandwidth fit in rd_estimate; only
+        which bins the fitted polynomials are evaluated at widens. Beyond the
+        bandwidth this is extrapolation (variance/bias grow) - use with care.
+    weights : np.ndarray or None, default None
+        Optional per-row frequency weights (bin counts). When provided the
+        binned path is taken: bandwidth selection (rd_estimate/bw_select) is
+        SKIPPED and the weighted local polynomial is fit over the full support
+        of the supplied points. Coefficients and a sandwich vcov are read from
+        rd_objects (order-p WLS, no CCT bias correction). The RD point estimate
+        is b_r[0]-b_l[0] with a normal CI from the bin-level sandwich, so the
+        downstream welfare/optim_thresh still have a usable interval.
     """
-    rdest = rd_estimate(y=y, x=x, c=c)
+    x_arr = np.asarray(x)
+
+    if weights is not None:
+        # Binned / frequency-weighted path: no bandwidth selection.
+        rdobj = rd_objects(
+            y=y, x=x, c=c, bw=None,
+            subset=np.ones(x_arr.shape[0], dtype=bool),
+            covariates=covariates, weights=weights,
+        )
+        b_l = np.asarray(rdobj["coefficients"]["left"]).ravel()
+        b_r = np.asarray(rdobj["coefficients"]["right"]).ravel()
+        v_l = rdobj["vcov"]["left"]
+        v_r = rdobj["vcov"]["right"]
+        bins = rdobj["bins"]
+
+        point_estimate = float(b_r[0] - b_l[0])
+        se = float(np.sqrt(max(v_r[0, 0], 0.0) + max(v_l[0, 0], 0.0)))
+        z = 1.959963984540054
+        estimates = [
+            point_estimate,
+            point_estimate - z * se,
+            point_estimate + z * se,
+        ]
+
+        return {
+            "rd_estimates": None,
+            "rd_plot_objects": rdobj,
+            "b_l": b_l,
+            "b_r": b_r,
+            "v_l": v_l,
+            "v_r": v_r,
+            "bins": bins,
+            "estimates": estimates,
+        }
+
+    rdest = rd_estimate(y=y, x=x, c=c, covariates=covariates)
     h_l = rdest["bandwidths"]["h_l"]
     h_r = rdest["bandwidths"]["h_r"]
     bw = [h_l, h_r]
 
-    subset = (-h_l <= x) & (x <= h_r)
+    if out_of_bandwidth:
+        subset = np.ones(x_arr.shape[0], dtype=bool)
+    else:
+        subset = (-h_l <= x_arr) & (x_arr <= h_r)
 
-    rdobj = rd_objects(y=y, x=x, c=c, bw=bw, subset=subset)
+    rdobj = rd_objects(y=y, x=x, c=c, bw=bw, subset=subset, covariates=covariates)
 
-    b_l = rdest["coef_poly"]["bias_corrected"]["left"]
-    b_r = rdest["coef_poly"]["bias_corrected"]["right"]
+    s_Y = rdest["s_Y"]
+    b_l = rdest["coef_poly"]["bias_corrected"]["left"] @ s_Y
+    b_r = rdest["coef_poly"]["bias_corrected"]["right"] @ s_Y
     v_l = rdest["V_poly"]["bias_corrected"]["left"]
     v_r = rdest["V_poly"]["bias_corrected"]["right"]
 

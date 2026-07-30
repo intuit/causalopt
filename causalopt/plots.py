@@ -12,6 +12,27 @@ from plotnine import (
 )
 
 
+def _normalize_results(results: dict) -> dict:
+    """
+    Accept either result shape used by the plot helpers.
+
+    The plot helpers were written against the flat ``optimum_threshold`` output
+    (keys ``rd_results``, ``predictions``, ``optimum_thresholds``,
+    ``current_threshold``, ``data_descriptives``). The unified ``causalopt``
+    entry point (``mode="binary"``) instead nests those objects under
+    ``details`` and renames a couple of keys. This helper detects the unified
+    shape and remaps it to the flat keys so both can be plotted with the same
+    functions. A flat result is returned unchanged.
+    """
+    if "details" in results and "optimum" in results and "frontier" in results:
+        flat = dict(results["details"])
+        flat["optimum_thresholds"] = results["optimum"]
+        current = results.get("current") or {}
+        flat["current_threshold"] = current.get("threshold")
+        return flat
+    return results
+
+
 def rdd_impact(results: dict, outcome_col: str):
     """
     Plot the RD impact at the current threshold for a single outcome variable.
@@ -36,8 +57,9 @@ def rdd_impact(results: dict, outcome_col: str):
     Parameters
     ----------
     results : dict
-        Output of optimum_threshold. Must contain keys "data_descriptives",
-        "rd_results", and "predictions".
+        Output of optimum_threshold or the unified causalopt (mode="binary")
+        entry point. Must expose "data_descriptives", "rd_results", and
+        "predictions" (directly or nested under "details").
     outcome_col : str
         Name of the outcome variable. Used in the plot title, y-axis label,
         and to look up the observed min/max from data_descriptives.
@@ -47,6 +69,8 @@ def rdd_impact(results: dict, outcome_col: str):
     plotnine.ggplot
         A ggplot object. Call .show() or display inline in a notebook.
     """
+    results = _normalize_results(results)
+
     # colors
     blue = "#0177c9"
     red = "#bd0707"
@@ -134,8 +158,10 @@ def plot_thresh(results: dict, outcome_col: str):
     Parameters
     ----------
     results : dict
-        Output of optimum_threshold. Must contain keys "rd_results",
-        "predictions", "optimum_thresholds", and "current_threshold".
+        Output of optimum_threshold or the unified causalopt (mode="binary")
+        entry point. Must expose "rd_results", "predictions",
+        "optimum_thresholds", and "current_threshold" (directly or nested under
+        "details" / "optimum" / "current").
     outcome_col : str
         Name of the outcome variable. Used in the plot title and y-axis label.
 
@@ -144,6 +170,7 @@ def plot_thresh(results: dict, outcome_col: str):
     plotnine.ggplot
         A ggplot object. Call .show() or display inline in a notebook.
     """
+    results = _normalize_results(results)
 
     rdest = results["rd_results"]
     predictions = results["predictions"]

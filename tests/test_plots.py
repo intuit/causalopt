@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from plotnine.ggplot import ggplot
 
-from causalopt import optimum_threshold
+from causalopt import causalopt, optimum_threshold
 from causalopt.plots import (
     plot_thresh,
     rdd_impact,
@@ -196,3 +196,32 @@ def test_plot_thresh_labels_present():
     assert hasattr(labels, "y")
 
     assert "Probability" in labels.x
+
+
+# ============================================================
+# Unified causalopt (mode="binary") output shape
+# ============================================================
+
+
+def test_plots_accept_unified_causalopt_output():
+    # The plot helpers should accept the unified causalopt result (keys nested
+    # under "details"/"optimum"/"current"), not just the flat optimum_threshold
+    # output.
+    df = _make_df(seed=9)
+
+    results = causalopt(
+        df,
+        outcomes=["y"],
+        score_cols="p_hat",
+        mode="binary",
+        threshold=0.5,
+    )
+
+    # Sanity: this is the unified (nested) shape, not the flat one.
+    assert "details" in results and "optimum" in results and "frontier" in results
+
+    g_impact = rdd_impact(results, "y")
+    assert isinstance(g_impact, ggplot)
+
+    g_thresh = plot_thresh(results, "y")
+    assert isinstance(g_thresh, ggplot)
