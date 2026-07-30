@@ -1,10 +1,12 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 from causalopt.utils import (
     _bw_mse,
     _prepare_inputs,
     _split_lr,
+    bin_data,
     complete_cases,
     covs_drop_fun,
     crossprod,
@@ -15,6 +17,7 @@ from causalopt.utils import (
     nn_residuals,
     poly_eval,
     qrXXinv,
+    resolve_binning,
     sandwich_se,
     sim_poly_ic,
     tomat,
@@ -198,11 +201,20 @@ def test_prepare_inputs():
     y = np.array([30.0, np.nan, 20.0, 10.0])
     Z = np.array([1.0, 2.0, 3.0, 4.0])
 
-    x2, y2, Z2, c2 = _prepare_inputs(y, x, c=1.0, Z=Z)
+    x2, y2, Z2, w2, c2 = _prepare_inputs(y, x, c=1.0, Z=Z)
 
     assert c2 == 0
+    assert w2 is None
     assert np.all(np.diff(x2[:, 0]) >= 0)
     assert x2.shape[0] == 2
+
+    # weights are carried through the same subset/NaN/sort alignment
+    wts = np.array([10.0, 20.0, 30.0, 40.0])
+    x3, y3, Z3, w3, _c3 = _prepare_inputs(y, x, c=1.0, Z=Z, w=wts)
+    assert w3.shape[0] == x3.shape[0] == 2
+    # rows with NaN (indices 1 and 2) dropped -> weights 10 (x=3) and 40 (x=2)
+    # after sorting by x: x=2 (w=40) then x=3 (w=10)
+    assert np.allclose(w3[:, 0], np.array([40.0, 10.0]))
 
 
 def test_split_lr():
@@ -221,3 +233,84 @@ def test_make_dups():
 
     np.testing.assert_array_equal(dups, [3, 3, 1, 3])
     np.testing.assert_array_equal(dupsid, [1, 2, 1, 3])
+
+
+# ============================================================
+# bin_data
+# ============================================================
+
+
+def test_bin_data_1d_shapes_counts_and_no_straddle():
+    rng = np.random.default_rng(0)
+    x = rng.uniform(-1, 1, 500)
+    y = 2.0 + 3.0 * x + rng.normal(0, 0.01, 500)
+    df = pd.DataFrame({"score": x, "Y": y})
+
+    out = bin_data(df, ["score"], ["Y"], cutoff=0.0, bin_spec=10)
+
+    # required columns
+    assert {"score", "Y", "sd_Y", "n", "side"}.issubset(out.columns)
+    # counts partition the raw rows
+    assert out["n"].sum() == len(df)
+    # no cell straddles the cutoff: side sign matches centroid sign
+    assert ((out["score"] >= 0) == (out["side"] == 1)).all()
+    # centroids preserve the linear relationship (resid ~ noise scale)
+    resid = np.abs(out["Y"] - (2.0 + 3.0 * out["score"]))
+    assert resid.max() < 0.1
+
+
+def test_bin_data_multidim_group_and_sparsity():
+    rng = np.random.default_rng(1)
+    K = 3
+    P = rng.dirichlet(np.ones(K), size=400)
+    df = pd.DataFrame(P, columns=[f"p{k}" for k in range(K)])
+    df["Y"] = P @ np.array([1.0, 2.0, 3.0]) + rng.normal(0, 0.01, 400)
+    T = P.argmax(axis=1)
+
+    out = bin_data(df, ["p0", "p1", "p2"], ["Y"], group=T, bin_spec=4)
+
+    assert {"p0", "p1", "p2", "Y", "sd_Y", "n", "group"}.issubset(out.columns)
+    assert out["n"].sum() == len(df)
+    # sparse: only non-empty cells, far fewer than 4**3 * K
+    assert len(out) <= 4 ** 3 * K
+
+
+def test_bin_data_cutoff_requires_single_coord():
+    df = pd.DataFrame({"a": [0.0, 1.0], "b": [0.0, 1.0], "Y": [1.0, 2.0]})
+    with pytest.raises(ValueError):
+        bin_data(df, ["a", "b"], ["Y"], cutoff=0.5)
+
+
+# ============================================================
+# resolve_binning
+# ============================================================
+
+
+def test_resolve_binning_three_cases():
+    rng = np.random.default_rng(2)
+    x = rng.uniform(-1, 1, 300)
+    df = pd.DataFrame({"score": x, "Y": 1.0 + x})
+
+    # case 1: raw -> no weights
+    work1, w1 = resolve_binning(df, ["score"], ["Y"])
+    assert w1 is None
+    assert len(work1) == len(df)
+
+    # case 2: bin now -> weights are the per-bin counts summing to N
+    work2, w2 = resolve_binning(df, ["score"], ["Y"], cutoff=0.0, bin=True, bin_spec=8)
+    assert w2 is not None
+    assert w2.sum() == len(df)
+    assert len(work2) == len(w2)
+
+    # case 3: already binned -> weights read from weight_col
+    work3, w3 = resolve_binning(work2, ["score"], ["Y"], binned_data=True, weight_col="n")
+    assert np.allclose(w3, work2["n"].to_numpy())
+
+
+def test_resolve_binning_guardrails():
+    df = pd.DataFrame({"score": [0.0, 1.0], "Y": [1.0, 2.0]})
+    with pytest.raises(ValueError):
+        resolve_binning(df, ["score"], ["Y"], bin=True, binned_data=True)
+    with pytest.raises(ValueError):
+        # binned_data but no weight column
+        resolve_binning(df, ["score"], ["Y"], binned_data=True, weight_col="n")

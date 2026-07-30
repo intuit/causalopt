@@ -50,11 +50,10 @@ def test_get_rd_objects_structure_and_keys():
     assert out["estimates"][0] >= out["estimates"][1]
     assert out["estimates"][0] <= out["estimates"][2]
 
-    # polynomial objects
-    assert out["b_l"].ndim == 2
-    assert out["b_r"].ndim == 2
-    assert out["b_l"].shape[1] == 1
-    assert out["b_r"].shape[1] == 1
+    # polynomial objects (1D coefficient vectors after s_Y contraction)
+    assert out["b_l"].ndim == 1
+    assert out["b_r"].ndim == 1
+    assert out["b_l"].shape[0] == out["b_r"].shape[0]
     assert out["v_l"].shape[0] == out["v_l"].shape[1]
     assert out["v_r"].shape[0] == out["v_r"].shape[1]
 

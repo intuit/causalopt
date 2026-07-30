@@ -1,0 +1,5 @@
+.venv/
+*.parquet
+*.csv
+*.docx
+.DS_Store

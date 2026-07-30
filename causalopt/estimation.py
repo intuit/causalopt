@@ -107,7 +107,7 @@ def bw_select(
     • All calculations are deterministic and reproducible.
     """
 
-    x, y, Z, c = _prepare_inputs(y, x, c, covariates, subset=subset)
+    x, y, Z, _w, c = _prepare_inputs(y, x, c, covariates, subset=subset)
     parts = _split_lr(x, y, Z)
 
     q = p + 1
@@ -307,7 +307,7 @@ def rd_estimate(
     • This function performs estimation and inference only; no plotting
       functionality is included.
     """
-    x, y, Z, c = _prepare_inputs(y, x, c, covariates)
+    x, y, Z, _w, c = _prepare_inputs(y, x, c, covariates)
 
     q = p + 1
     deriv = 0
@@ -491,6 +491,7 @@ def rd_estimate(
             "bias_corrected": (tau_bc - z * se_cl, tau_bc + z * se_cl),
             "robust": (tau_bc - z * se_rb, tau_bc + z * se_rb),
         },
+        "s_Y": s_Y,
         "bandwidths": {"h_l": h_l, "h_r": h_r, "b_l": b_l, "b_r": b_r},
         "p": p,
         "q": q,
@@ -517,6 +518,7 @@ def rd_objects(
     covariates: np.ndarray | None = None,
     bw: list | None = None,
     subset: np.ndarray | None = None,
+    weights: np.ndarray | None = None,
 ) -> dict:
     """
     Construct numerical objects required to produce a Regression Discontinuity
@@ -559,6 +561,13 @@ def rd_objects(
     covariates : array-like or None, default = None
         Optional covariates to be included linearly in the global polynomial
         regressions.
+
+    weights : array-like or None, default = None
+        Optional per-observation frequency weights (e.g. bin counts when fitting
+        on aggregated/binned data). They multiply the triangular kernel weights
+        so the fit becomes weighted LS; when None the behaviour is the classic
+        unweighted fit. Used by the binning path together with ``bw`` set to the
+        full support (no bandwidth selection).
 
     Returns
     -------
@@ -631,7 +640,7 @@ def rd_objects(
     • The returned objects are sufficient to reproduce `rdplot` numerically.
     """
 
-    x, y, Z, c = _prepare_inputs(y, x, c, covariates, subset=subset)
+    x, y, Z, w, c = _prepare_inputs(y, x, c, covariates, subset=subset, w=weights)
 
     x_min = float(np.min(x))
     x_max = float(np.max(x))
@@ -646,6 +655,9 @@ def rd_objects(
 
     z_l = Z[left] if Z is not None else None
     z_r = Z[right] if Z is not None else None
+
+    w_l = w[left] if w is not None else None
+    w_r = w[right] if w is not None else None
 
     n_l, n_r = x_l.shape[0], x_r.shape[0]
     n = n_l + n_r
@@ -673,6 +685,14 @@ def rd_objects(
 
     W_l = triangular_kernel(x_l[:, 0], c, h_l).reshape(-1, 1)
     W_r = triangular_kernel(x_r[:, 0], c, h_r).reshape(-1, 1)
+
+    # Frequency weights (e.g. bin counts): multiply the kernel weights so the
+    # local polynomial becomes weighted LS on the supplied points. All downstream
+    # objects (invG, gamma, beta/s_Y, sandwich vcov) inherit them automatically.
+    if w_l is not None:
+        W_l = W_l * w_l
+    if w_r is not None:
+        W_r = W_r * w_r
 
     invG_l = qrXXinv(np.sqrt(W_l) * R_p_l)
     invG_r = qrXXinv(np.sqrt(W_r) * R_p_r)
@@ -705,7 +725,7 @@ def rd_objects(
         ZWZ = (ZWD_l[:, colsZ] - UiGU_l[:, colsZ]) + (ZWD_r[:, colsZ] - UiGU_r[:, colsZ])
         ZWY = (ZWD_l[:, :1] - UiGU_l[:, :1]) + (ZWD_r[:, :1] - UiGU_r[:, :1])
 
-        gamma = inv_chol(ZWZ) @ ZWY
+        gamma = np.linalg.pinv(ZWZ) @ ZWY
         s_Y = np.concatenate(([1.0], -gamma[:, 0])).reshape(-1, 1)
 
         gamma_l = (s_Y.T @ beta_l.T).T
