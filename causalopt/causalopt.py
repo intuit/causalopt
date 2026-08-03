@@ -321,7 +321,10 @@ def causalopt(
         ``{"mode", "current", "frontier", "optimum", "details"}``. In binary
         mode, ``details`` carries data_descriptives / rdplot / predictions / welfare
         (and rd_results / estimates, which are None in binned mode); in
-        multiclass, ``details`` carries only the call params.
+        multiclass, ``details`` carries the call params (kernel, probabilities,
+        B, tau) plus the intermediates from ``get_thresholds``
+        (data_descriptives, prepared, bandwidths, estimates, predictions, and the
+        grid-evaluated fitted curves).
     """
     if mode not in ("binary", "multiclass"):
         raise ValueError("mode must be 'binary' or 'multiclass'.")
@@ -422,5 +425,6 @@ def causalopt(
         bin=bin, binned_data=binned_data, bin_spec=bin_spec, weight_col=weight_col,
     )
 
-    details = {"kernel": kernel, "probabilities": prob, "B": B, "tau": tau}
+    details = res.pop("details", {})
+    details.update({"kernel": kernel, "probabilities": prob, "B": B, "tau": tau})
     return {"mode": "multiclass", **res, "details": details}

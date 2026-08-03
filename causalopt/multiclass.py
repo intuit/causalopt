@@ -1242,6 +1242,97 @@ def pred_multi(df, outcome_cols, estimates, K):
     return dfpred
 
 
+def fitted_curves(df, outcome_cols, estimates, pair_thresh, K,
+                  n_grid=100, out_of_bandwidth=False, nsim=10000,
+                  alpha=0.05, seed=None):
+    """
+    Grid-evaluated fitted RD curves per outcome, class, and boundary axis.
+
+    This is the multiclass analogue of the binary ``rd_plot_objects``: it turns
+    the per-class local-polynomial fits from ``est_multi`` into plottable
+    curves. For each outcome and each independent boundary axis ``dist_1_j``
+    (j = 2..K), the axis is swept over a grid while the other distance axes are
+    held at 0 (i.e. on the boundary), and every class ``c`` fitted surface is
+    evaluated along that slice together with a simulation-based confidence band
+    (reusing ``sim_poly_multi`` exactly as ``pred_multi`` does).
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Prepared data with the ``dist_1_k`` running coordinates (``dfprep``).
+        Only used to derive the observed grid range when no bandwidth is
+        available (binned / no-bandwidth mode) or when ``out_of_bandwidth``.
+    outcome_cols : list of str
+        Outcome column names.
+    estimates : dict
+        Output of ``est_multi`` (``{outcome: {class: rd_fit_multi(...)}}``).
+    pair_thresh : dict or None
+        Per-pair bandwidths from ``bdselect`` (``{outcome: {(j, k): h_jk}}``).
+        When None (binned / no-bandwidth mode) the grid range falls back to the
+        observed support of each ``dist_1_j``.
+    K : int
+        Number of classes.
+    n_grid : int, default 100
+        Number of grid points per curve.
+    out_of_bandwidth : bool, default False
+        If True, use the observed support of each ``dist_1_j`` as the grid range
+        instead of the per-pair bandwidth (matching ``find_thresh``).
+    nsim, alpha, seed
+        Forwarded to ``sim_poly_multi`` for the confidence band.
+
+    Returns
+    -------
+    dict
+        ``{outcome: {(1, j): DataFrame}}`` where each DataFrame has columns
+        ``x`` (grid over ``dist_1_j``) and, per class ``c``, ``y_hat_{c}``,
+        ``lower_{c}`` and ``upper_{c}``.
+    """
+    curves = {}
+
+    for outcome in outcome_cols:
+        curves[outcome] = {}
+        est = estimates[outcome]
+
+        for j in range(2, K + 1):
+            axis_idx = j - 2  # position of dist_1_j within the K-1 basis
+            dist_col = f"dist_1_{j}"
+
+            # Grid range: symmetric bandwidth window when available, else the
+            # observed support of the axis (binned / no-bandwidth / OOB).
+            h = None
+            if pair_thresh is not None and not out_of_bandwidth:
+                h = pair_thresh[outcome].get((1, j))
+            if h is None:
+                lo, hi = float(df[dist_col].min()), float(df[dist_col].max())
+            else:
+                lo, hi = -float(h), float(h)
+
+            x_grid = np.linspace(lo, hi, n_grid)
+
+            # Hold every other axis at 0 (on the boundary) and sweep dist_1_j.
+            X = np.zeros((n_grid, K - 1))
+            X[:, axis_idx] = x_grid
+
+            out = pd.DataFrame({"x": x_grid})
+            for c in range(1, K + 1):
+                b = est[c]["coef_poly"]["bias_corrected"]
+                V = est[c]["V_poly"]["bias_corrected"]
+                # tol=-1.0 keeps every basis column: the held-at-0 axes are
+                # zero-norm columns that the default QR-pivoting tol would drop,
+                # which would break the dimension match against the fitted b.
+                y_hat, _mean_fit, lower, upper = sim_poly_multi(
+                    X=X, b=b, V=V, p=1, nsim=nsim, alpha=alpha, seed=seed,
+                    tol=-1.0,
+                )
+                out[f"y_hat_{c}"] = y_hat
+                out[f"lower_{c}"] = lower
+                out[f"upper_{c}"] = upper
+
+            curves[outcome][(1, j)] = out
+
+    return curves
+
+
 def find_thresh(df, outcome_cols, pair_thresh, B=10_000, probabilities=True,
                 out_of_bandwidth=False, weight_col=None):
     """B is the total search budget; per-axis grid resolution is
@@ -1431,6 +1522,21 @@ def get_thresholds(data, outcome_cols, probability_cols, tau=None, B=10_000,
         "current" : dict
             Baseline at the supplied tau (gain 0 reference), with keys "tau" and
             "outcomes_at_tau".
+        "details" : dict
+            The intermediates computed along the way, for inspection/plotting:
+                "data_descriptives" - describe() of the working (post-binning) frame.
+                "prepared"          - the prepared frame (Prob_* columns, the
+                                       dist_j_k boundary distances, and the current
+                                       assignment column T).
+                "bandwidths"        - the bdselect pair_thresh
+                                       ({outcome: {(j, k): h_jk}}); None in
+                                       binned / no-bandwidth mode.
+                "estimates"         - the est_multi per-class RD fits.
+                "predictions"       - the pred_multi frame with the counterfactual
+                                       surfaces {outcome}_hat_j.
+                "curves"            - fitted_curves output: grid-evaluated fitted
+                                       curves with confidence bands per outcome,
+                                       class, and boundary axis.
     """
 
     df = data.copy()
@@ -1521,7 +1627,25 @@ def get_thresholds(data, outcome_cols, probability_cols, tau=None, B=10_000,
         "outcomes_at_tau": {o: {"mean": 0.0, "total": 0.0} for o in outcome_cols},
     }
 
-    return {"frontier": frontier, "optimum": optimum, "current": current}
+    curves = fitted_curves(
+        dfprep, outcome_cols, esthh, tt, K, out_of_bandwidth=oob,
+    )
+
+    details = {
+        "data_descriptives": pd.DataFrame(df.describe()),
+        "prepared": dfprep,
+        "bandwidths": tt,
+        "estimates": esthh,
+        "predictions": pred_df,
+        "curves": curves,
+    }
+
+    return {
+        "frontier": frontier,
+        "optimum": optimum,
+        "current": current,
+        "details": details,
+    }
 
 
 # ── Visualization ─────────────────────────────────────────────────────────────
