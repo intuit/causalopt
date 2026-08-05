@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from numpy.random import default_rng
 from scipy.linalg import qr
 from scipy.special import expit
+from scipy.stats import norm
 
 from causalopt.utils import *
 from causalopt.estimation import bw_select
@@ -1333,6 +1334,163 @@ def fitted_curves(df, outcome_cols, estimates, pair_thresh, K,
     return curves
 
 
+def multiclass_ate(df, outcome_cols, estimates, pair_thresh, K,
+                   kind="both", alpha=0.05, out_of_bandwidth=False,
+                   weight_col=None):
+    """
+    Average treatment effects at the class boundaries (the discontinuities).
+
+    In the binary case the ATE is a single scalar: the outcome jump at the one
+    cutoff. In the multiclass case each pairwise class boundary ``(j, k)`` is
+    its own discontinuity, so this reports one effect per ordered pair
+    ``j < k``, per outcome, using two evaluation rules:
+
+    - **junction** - the jump at the K-way meeting point (all independent
+      distances 0, which lies on every boundary at once). This is the intercept
+      difference ``b_k[0] - b_j[0]`` of the two per-class fits, the direct
+      analogue of the binary intercept jump.
+    - **facet** - the density-weighted average of ``m_k(d) - m_j(d)`` over the
+      observations straddling boundary ``(j, k)`` (within the pairwise bandwidth
+      slab, or all j/k rows in binned / no-bandwidth / out-of-bandwidth mode).
+
+    Both use the bias-corrected coefficients and covariances. The per-class fits
+    are run on disjoint decision regions (``T == j``) so they are independent
+    and the variance of a pairwise difference is the sum of the two variances.
+    Because both estimators are linear in the coefficients, the confidence
+    intervals are closed-form (no simulation).
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Prepared data (``dfprep``) with the ``dist_j_k`` boundary distances,
+        ``dist_1_*`` running coordinates, and the current assignment ``T``.
+    outcome_cols : list of str
+        Outcome column names.
+    estimates : dict
+        Output of ``est_multi`` (``{outcome: {class: rd_fit_multi(...)}}``).
+    pair_thresh : dict or None
+        Per-pair bandwidths from ``bdselect``. When None (binned /
+        no-bandwidth), the facet slab falls back to all rows in ``{j, k}``.
+    K : int
+        Number of classes.
+    kind : {"both", "junction", "facet"}, default "both"
+        Which estimator(s) to return.
+    alpha : float, default 0.05
+        Tail probability for the (two-sided) confidence intervals.
+    out_of_bandwidth : bool, default False
+        If True, the facet slab uses all ``{j, k}`` rows instead of the
+        bandwidth window (matching ``find_thresh``).
+    weight_col : str or None, default None
+        Optional per-row frequency-weight column (bin counts) used for the
+        facet averaging.
+
+    Returns
+    -------
+    dict
+        ``{outcome: {...}}`` where each value has the requested tables under
+        keys "junction" and/or "facet". Each table is a DataFrame with columns
+        ``class_j, class_k, estimate, se, ci_l, ci_r`` (facet also ``n``); the
+        reported effect is class ``k`` relative to class ``j``.
+    """
+    if kind not in ("both", "junction", "facet"):
+        raise ValueError("kind must be 'both', 'junction', or 'facet'.")
+
+    z = norm.ppf(1 - alpha / 2)
+    want_junction = kind in ("both", "junction")
+    want_facet = kind in ("both", "facet")
+
+    # Same p=1 running-variable basis used in est_multi / pred_multi.
+    indep_cols = [f"dist_1_{k}" for k in range(2, K + 1)]
+
+    ate = {}
+    for outcome in outcome_cols:
+        est = estimates[outcome]
+        junction_rows = []
+        facet_rows = []
+
+        for j in range(1, K + 1):
+            for k in range(j + 1, K + 1):
+                b_j = np.asarray(est[j]["coef_poly"]["bias_corrected"]).ravel()
+                b_k = np.asarray(est[k]["coef_poly"]["bias_corrected"]).ravel()
+                V_j = np.asarray(est[j]["V_poly"]["bias_corrected"])
+                V_k = np.asarray(est[k]["V_poly"]["bias_corrected"])
+
+                if want_junction:
+                    est_jk = float(b_k[0] - b_j[0])
+                    se_jk = float(np.sqrt(V_k[0, 0] + V_j[0, 0]))
+                    junction_rows.append({
+                        "class_j": j,
+                        "class_k": k,
+                        "estimate": est_jk,
+                        "se": se_jk,
+                        "ci_l": est_jk - z * se_jk,
+                        "ci_r": est_jk + z * se_jk,
+                    })
+
+                if want_facet:
+                    # Observations straddling the (j, k) boundary.
+                    in_pair = df["T"].isin([j, k])
+                    h = None
+                    if pair_thresh is not None and not out_of_bandwidth:
+                        h = pair_thresh[outcome].get((j, k))
+                    if h is not None:
+                        mask = in_pair & (df[f"dist_{j}_{k}"].abs() <= h)
+                    else:
+                        mask = in_pair
+
+                    sub = df[mask]
+                    n_slab = int(len(sub))
+
+                    if n_slab == 0:
+                        est_f = np.nan
+                        se_f = np.nan
+                    else:
+                        X = sub[indep_cols].to_numpy()
+                        R, _ = poly_terms(X, 1)
+                        if R.shape[1] != b_j.shape[0]:
+                            raise ValueError(
+                                f"ATE basis dimension mismatch for outcome "
+                                f"'{outcome}', pair ({j}, {k}): design has "
+                                f"{R.shape[1]} columns but the fit has "
+                                f"{b_j.shape[0]} coefficients (expected a "
+                                f"full-rank p=1 basis)."
+                            )
+                        if weight_col is not None and weight_col in sub.columns:
+                            wts = sub[weight_col].to_numpy(dtype=float)
+                            rbar = np.average(R, axis=0, weights=wts)
+                        else:
+                            rbar = R.mean(axis=0)
+
+                        est_f = float(rbar @ (b_k - b_j))
+                        var_f = float(rbar @ V_k @ rbar + rbar @ V_j @ rbar)
+                        se_f = float(np.sqrt(var_f))
+
+                    facet_rows.append({
+                        "class_j": j,
+                        "class_k": k,
+                        "estimate": est_f,
+                        "se": se_f,
+                        "ci_l": est_f - z * se_f,
+                        "ci_r": est_f + z * se_f,
+                        "n": n_slab,
+                    })
+
+        out = {}
+        if want_junction:
+            out["junction"] = pd.DataFrame(
+                junction_rows,
+                columns=["class_j", "class_k", "estimate", "se", "ci_l", "ci_r"],
+            )
+        if want_facet:
+            out["facet"] = pd.DataFrame(
+                facet_rows,
+                columns=["class_j", "class_k", "estimate", "se", "ci_l", "ci_r", "n"],
+            )
+        ate[outcome] = out
+
+    return ate
+
+
 def find_thresh(df, outcome_cols, pair_thresh, B=10_000, probabilities=True,
                 out_of_bandwidth=False, weight_col=None):
     """B is the total search budget; per-axis grid resolution is
@@ -1537,6 +1695,14 @@ def get_thresholds(data, outcome_cols, probability_cols, tau=None, B=10_000,
                 "curves"            - fitted_curves output: grid-evaluated fitted
                                        curves with confidence bands per outcome,
                                        class, and boundary axis.
+                "ate"               - multiclass_ate output: the treatment effect
+                                       at each pairwise class boundary, per
+                                       outcome, as bias-corrected estimates with
+                                       confidence intervals. Two tables per
+                                       outcome: "junction" (jump at the K-way
+                                       meeting point) and "facet" (density-
+                                       weighted average over units straddling the
+                                       boundary).
     """
 
     df = data.copy()
@@ -1631,6 +1797,11 @@ def get_thresholds(data, outcome_cols, probability_cols, tau=None, B=10_000,
         dfprep, outcome_cols, esthh, tt, K, out_of_bandwidth=oob,
     )
 
+    ate = multiclass_ate(
+        dfprep, outcome_cols, esthh, tt, K,
+        out_of_bandwidth=oob, weight_col=wname,
+    )
+
     details = {
         "data_descriptives": pd.DataFrame(df.describe()),
         "prepared": dfprep,
@@ -1638,6 +1809,7 @@ def get_thresholds(data, outcome_cols, probability_cols, tau=None, B=10_000,
         "estimates": esthh,
         "predictions": pred_df,
         "curves": curves,
+        "ate": ate,
     }
 
     return {
