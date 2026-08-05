@@ -323,8 +323,9 @@ def causalopt(
         (and rd_results / estimates, which are None in binned mode); in
         multiclass, ``details`` carries the call params (kernel, probabilities,
         B, tau) plus the intermediates from ``get_thresholds``
-        (data_descriptives, prepared, bandwidths, estimates, predictions, and the
-        grid-evaluated fitted curves).
+        (data_descriptives, prepared, bandwidths, estimates, predictions, the
+        grid-evaluated fitted curves, and ``ate`` - the treatment effect at each
+        pairwise class boundary as junction and facet tables).
     """
     if mode not in ("binary", "multiclass"):
         raise ValueError("mode must be 'binary' or 'multiclass'.")
