@@ -2,7 +2,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/causalopt.svg)](https://pypi.org/project/causalopt/)
 ![Supported Python versions](https://img.shields.io/badge/python-3.11_|_3.12_|_3.13-green?logo=python)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache_2.0-blue.svg)](https://github.com/intuit/causalopt/blob/main/LICENSE)
 
 **CausalOpt** is a Python package for causal inference using Regression Discontinuity Design (RDD). It provides tools for estimating treatment effects at thresholds, optimizing decision thresholds, and visualizing RDD results — for both a single **binary** cutoff and a **multiclass** decision.
 
@@ -144,10 +144,10 @@ plot_simplex(df, tau_opt)
 
 ### Example notebooks
 
-End-to-end, runnable walkthroughs live in [`examples/`](examples/):
+End-to-end, runnable walkthroughs live in [`examples/`](https://github.com/intuit/causalopt/tree/main/examples):
 
-- [`examples/binary_case.ipynb`](examples/binary_case.ipynb) — the binary workflow on simulated data.
-- [`examples/multiclass_case.ipynb`](examples/multiclass_case.ipynb) — the multiclass (K=3, simplex) workflow.
+- [`examples/binary_case.ipynb`](https://github.com/intuit/causalopt/blob/main/examples/binary_case.ipynb) — the binary workflow on simulated data.
+- [`examples/multiclass_case.ipynb`](https://github.com/intuit/causalopt/blob/main/examples/multiclass_case.ipynb) — the multiclass (K=3, simplex) workflow.
 
 ## Use Cases
 
