@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 
 from causalopt.thresh_tradeoff import gains_eval, pred_tradeoff
@@ -248,6 +249,73 @@ def tradeoff_threshold(
     return final_result
 
 
+def _binary_ate_table(rd_by_outcome: dict, x, weights) -> pd.DataFrame:
+    """
+    Flatten per-outcome RD fits into one summary row per outcome.
+
+    Columns: outcome, coef, se, ci_lower, ci_upper, h, b, n_left, n_right.
+
+    On the raw path (``rd_estimates`` present) the row reports the
+    bias-corrected point estimate with its conventional SE / CI, the MSE-optimal
+    bandwidths, and the observation counts inside the estimation bandwidth. On
+    the binned path (``rd_estimates`` is None) there is no bandwidth selection
+    or bias correction, so ``h``/``b`` are NaN, the SE is recovered from the
+    bin-level sandwich, and ``n_left``/``n_right`` are the summed bin weights
+    on each side of the cutoff.
+    """
+    x_arr = np.asarray(x)
+    rows = []
+    for outcome, ro in rd_by_outcome.items():
+        rdest = ro["rd_estimates"]
+        if rdest is not None:
+            bw = rdest["bandwidths"]
+            if not (
+                np.isclose(bw["h_l"], bw["h_r"]) and np.isclose(bw["b_l"], bw["b_r"])
+            ):
+                raise RuntimeError(
+                    "Asymmetric bandwidths are not supported by the ATE summary "
+                    f"table (h_l={bw['h_l']}, h_r={bw['h_r']}, "
+                    f"b_l={bw['b_l']}, b_r={bw['b_r']})."
+                )
+            ci_lo, ci_hi = rdest["ci"]["bias_corrected"]
+            rows.append({
+                "outcome": outcome,
+                "coef": float(rdest["tau"]["bias_corrected"]),
+                "se": float(rdest["se"]["conventional"]),
+                "ci_lower": float(ci_lo),
+                "ci_upper": float(ci_hi),
+                "h": float(bw["h_l"]),
+                "b": float(bw["b_l"]),
+                "n_left": int(rdest["N_h"]["left"]),
+                "n_right": int(rdest["N_h"]["right"]),
+            })
+        else:
+            w_arr = np.asarray(weights, dtype=float)
+            coef, ci_lo, ci_hi = ro["estimates"]
+            se = float(np.sqrt(
+                max(ro["v_r"][0, 0], 0.0) + max(ro["v_l"][0, 0], 0.0)
+            ))
+            rows.append({
+                "outcome": outcome,
+                "coef": float(coef),
+                "se": se,
+                "ci_lower": float(ci_lo),
+                "ci_upper": float(ci_hi),
+                "h": np.nan,
+                "b": np.nan,
+                "n_left": float(w_arr[x_arr < 0].sum()),
+                "n_right": float(w_arr[x_arr >= 0].sum()),
+            })
+
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "outcome", "coef", "se", "ci_lower", "ci_upper",
+            "h", "b", "n_left", "n_right",
+        ],
+    )
+
+
 def causalopt(
     df: pd.DataFrame,
     outcomes,
@@ -320,8 +388,23 @@ def causalopt(
     dict
         ``{"mode", "current", "frontier", "optimum", "details"}``. In binary
         mode, ``details`` carries data_descriptives / rdplot / predictions / welfare
-        (and rd_results / estimates, which are None in binned mode); in
-        multiclass, ``details`` carries the call params (kernel, probabilities,
+        for the primary outcome (and rd_results / estimates, where rd_results is
+        None in binned mode), plus two per-outcome views covering every
+        element of ``outcomes``:
+
+            ``by_outcome`` : dict
+                ``{outcome: {"rd_results", "estimates", "rdplot"}}`` - the full
+                RD objects for each outcome (the primary entry is the same
+                object as the top-level keys).
+            ``ate`` : pd.DataFrame
+                One row per outcome with columns ``outcome, coef, se,
+                ci_lower, ci_upper, h, b, n_left, n_right``: the bias-corrected
+                effect at the cutoff, its SE and 95% CI, the estimation (h)
+                and bias (b) bandwidths, and the observations used on each
+                side. In binned mode ``h``/``b`` are NaN and ``n_left``/
+                ``n_right`` are summed bin weights.
+
+        In multiclass, ``details`` carries the call params (kernel, probabilities,
         B, tau) plus the intermediates from ``get_thresholds``
         (data_descriptives, prepared, bandwidths, estimates, predictions, the
         grid-evaluated fitted curves, and ``ate`` - the treatment effect at each
@@ -381,11 +464,13 @@ def causalopt(
 
         pred0 = pred_tradeoff(rdobj, inputs=None)
         front = gains_eval(pred0, outcomes[0])
+        rd_by_outcome = {outcomes[0]: rdobj}
         for o in outcomes[1:]:
             ro = get_rd_objects(
                 work[o].to_numpy(), x, 0,
                 out_of_bandwidth=out_of_bandwidth, weights=w,
             )
+            rd_by_outcome[o] = ro
             front = front.merge(
                 gains_eval(pred_tradeoff(ro, pred0[["x", "n", "p"]]), o),
                 on=["x", "n", "p"],
@@ -398,6 +483,15 @@ def causalopt(
             "welfare": wf,
             "rd_results": rdobj["rd_estimates"],
             "estimates": rdobj["estimates"],
+            "by_outcome": {
+                o: {
+                    "rd_results": ro["rd_estimates"],
+                    "estimates": ro["estimates"],
+                    "rdplot": ro["rd_plot_objects"],
+                }
+                for o, ro in rd_by_outcome.items()
+            },
+            "ate": _binary_ate_table(rd_by_outcome, x, w),
         }
 
         return {
