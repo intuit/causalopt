@@ -262,6 +262,62 @@ def test_causalopt_binary_shared_grid_and_both_analyses():
     assert "Recommendation" in r["optimum"]
     assert r["current"]["threshold"] == 0.5
 
+    # secondary RD fits are kept, not thrown away
+    d = r["details"]
+    assert set(d["by_outcome"]) == {"Y1", "Y2"}
+    assert d["by_outcome"]["Y1"]["estimates"] is d["estimates"]
+    assert d["by_outcome"]["Y1"]["rd_results"] is d["rd_results"]
+    assert d["by_outcome"]["Y2"]["rd_results"] is not None
+
+    ate = d["ate"]
+    assert list(ate.columns) == [
+        "outcome", "coef", "se", "ci_lower", "ci_upper",
+        "h", "b", "n_left", "n_right",
+    ]
+    assert list(ate["outcome"]) == ["Y1", "Y2"]
+    ate = ate.set_index("outcome")
+    assert abs(ate.loc["Y1", "coef"] - 2.0) < 0.3
+    assert abs(ate.loc["Y2", "coef"] + 1.0) < 0.3
+    assert (ate["ci_lower"] <= ate["coef"]).all()
+    assert (ate["coef"] <= ate["ci_upper"]).all()
+    assert (ate["se"] > 0).all()
+    assert (ate["h"] > 0).all()
+    assert (ate["h"] <= ate["b"]).all()
+    assert ((ate["n_left"] + ate["n_right"]) <= n).all()
+    # the table agrees with the per-outcome estimates list
+    assert np.isclose(ate.loc["Y2", "coef"], d["by_outcome"]["Y2"]["estimates"][0])
+
+
+def test_causalopt_binary_ate_table_binned():
+    rng = np.random.default_rng(11)
+    n = 4000
+    s = rng.uniform(0.0, 1.0, n)
+    df = pd.DataFrame(
+        {
+            "score": s,
+            "Y1": 1 + 2 * (s > 0.5) + rng.normal(0, 0.1, n),
+            "Y2": 3 - 1 * (s > 0.5) + rng.normal(0, 0.1, n),
+        }
+    )
+
+    r = causalopt(
+        df, ["Y1", "Y2"], "score", mode="binary", threshold=0.5,
+        bin=True, bin_spec=40,
+    )
+    d = r["details"]
+
+    for o in ("Y1", "Y2"):
+        assert d["by_outcome"][o]["rd_results"] is None
+
+    ate = d["ate"].set_index("outcome")
+    assert abs(ate.loc["Y1", "coef"] - 2.0) < 0.3
+    assert abs(ate.loc["Y2", "coef"] + 1.0) < 0.3
+    assert ate["h"].isna().all()
+    assert ate["b"].isna().all()
+    assert (ate["se"] > 0).all()
+    # binned WLS uses the full support: all weight is accounted for
+    assert np.allclose(ate["n_left"] + ate["n_right"], n)
+
 
 def test_causalopt_multiclass_passthrough():
     rng = np.random.default_rng(8)
